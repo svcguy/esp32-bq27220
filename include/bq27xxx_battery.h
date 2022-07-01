@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef __LINUX_BQ27X00_BATTERY_H__
-#define __LINUX_BQ27X00_BATTERY_H__
+#ifndef __BQ27X00_BATTERY_H__
+#define __BQ27X00_BATTERY_H__
 
-enum bq27xxx_chip {
+enum bq27xxx_chip
+{
 	BQ27000 = 1, /* bq27000, bq27200 */
 	BQ27010, /* bq27010, bq27210 */
 	BQ2750X, /* bq27500 deprecated alias */
@@ -37,14 +38,16 @@ enum bq27xxx_chip {
 };
 
 struct bq27xxx_device_info;
-struct bq27xxx_access_methods {
-	int (*read)(struct bq27xxx_device_info *di, u8 reg, bool single);
-	int (*write)(struct bq27xxx_device_info *di, u8 reg, int value, bool single);
-	int (*read_bulk)(struct bq27xxx_device_info *di, u8 reg, u8 *data, int len);
-	int (*write_bulk)(struct bq27xxx_device_info *di, u8 reg, u8 *data, int len);
+struct bq27xxx_access_methods
+{
+	int (*read)(struct bq27xxx_device_info *di, uint8_t reg, bool single);
+	int (*write)(struct bq27xxx_device_info *di, uint8_t reg, int value, bool single);
+	int (*read_bulk)(struct bq27xxx_device_info *di, uint8_t reg, uint8_t *data, int len);
+	int (*write_bulk)(struct bq27xxx_device_info *di, uint8_t reg, uint8_t *data, int len);
 };
 
-struct bq27xxx_reg_cache {
+struct bq27xxx_reg_cache
+{
 	int temperature;
 	int time_to_empty;
 	int time_to_empty_avg;
@@ -57,23 +60,19 @@ struct bq27xxx_reg_cache {
 	int health;
 };
 
-struct bq27xxx_device_info {
-	struct device *dev;
+struct bq27xxx_device_info
+{
 	int id;
 	enum bq27xxx_chip chip;
-	u32 opts;
+	uint32_t opts;
 	const char *name;
 	struct bq27xxx_dm_reg *dm_regs;
-	u32 unseal_key;
+	uint32_t unseal_key;
 	struct bq27xxx_access_methods bus;
 	struct bq27xxx_reg_cache cache;
 	int charge_design_full;
 	unsigned long last_update;
-	struct delayed_work work;
-	struct power_supply *bat;
-	struct list_head list;
-	struct mutex lock;
-	u8 *regs;
+	uint8_t *regs;
 };
 
 void bq27xxx_battery_update(struct bq27xxx_device_info *di);
