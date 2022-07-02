@@ -42,130 +42,56 @@
  * https://www.ti.com/product/bq78z100
  */
 
-#include "bq27xxx_battery.h"
+#include <linux/device.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/param.h>
+#include <linux/jiffies.h>
+#include <linux/workqueue.h>
+#include <linux/delay.h>
+#include <linux/platform_device.h>
+#include <linux/power_supply.h>
+#include <linux/slab.h>
+#include <linux/of.h>
+
+#include <linux/power/bq27xxx_battery.h>
 
 #define BQ27XXX_MANUFACTURER	"Texas Instruments"
 
 /* BQ27XXX Flags */
-#define BQ27XXX_FLAG_DSC			BIT(0)
-#define BQ27XXX_FLAG_SOCF			BIT(1) /* State-of-Charge threshold final */
-#define BQ27XXX_FLAG_SOC1			BIT(2) /* State-of-Charge threshold 1 */
-#define BQ27XXX_FLAG_CFGUP			BIT(4)
-#define BQ27XXX_FLAG_FC				BIT(9)
-#define BQ27XXX_FLAG_OTD			BIT(14)
-#define BQ27XXX_FLAG_OTC			BIT(15)
-#define BQ27XXX_FLAG_UT				BIT(14)
-#define BQ27XXX_FLAG_OT				BIT(15)
+#define BQ27XXX_FLAG_DSC	BIT(0)
+#define BQ27XXX_FLAG_SOCF	BIT(1) /* State-of-Charge threshold final */
+#define BQ27XXX_FLAG_SOC1	BIT(2) /* State-of-Charge threshold 1 */
+#define BQ27XXX_FLAG_CFGUP	BIT(4)
+#define BQ27XXX_FLAG_FC		BIT(9)
+#define BQ27XXX_FLAG_OTD	BIT(14)
+#define BQ27XXX_FLAG_OTC	BIT(15)
+#define BQ27XXX_FLAG_UT		BIT(14)
+#define BQ27XXX_FLAG_OT		BIT(15)
 
 /* BQ27000 has different layout for Flags register */
-#define BQ27000_FLAG_EDVF			BIT(0) /* Final End-of-Discharge-Voltage flag */
-#define BQ27000_FLAG_EDV1			BIT(1) /* First End-of-Discharge-Voltage flag */
-#define BQ27000_FLAG_CI				BIT(4) /* Capacity Inaccurate flag */
-#define BQ27000_FLAG_FC				BIT(5)
-#define BQ27000_FLAG_CHGS			BIT(7) /* Charge state flag */
+#define BQ27000_FLAG_EDVF	BIT(0) /* Final End-of-Discharge-Voltage flag */
+#define BQ27000_FLAG_EDV1	BIT(1) /* First End-of-Discharge-Voltage flag */
+#define BQ27000_FLAG_CI		BIT(4) /* Capacity Inaccurate flag */
+#define BQ27000_FLAG_FC		BIT(5)
+#define BQ27000_FLAG_CHGS	BIT(7) /* Charge state flag */
 
 /* BQ27Z561 has different layout for Flags register */
-#define BQ27Z561_FLAG_FDC			BIT(4) /* Battery fully discharged */
-#define BQ27Z561_FLAG_FC			BIT(5) /* Battery fully charged */
-#define BQ27Z561_FLAG_DIS_CH		BIT(6) /* Battery is discharging */
+#define BQ27Z561_FLAG_FDC	BIT(4) /* Battery fully discharged */
+#define BQ27Z561_FLAG_FC	BIT(5) /* Battery fully charged */
+#define BQ27Z561_FLAG_DIS_CH	BIT(6) /* Battery is discharging */
 
 /* control register params */
-#define BQ27XXX_SEALED				0x20
+#define BQ27XXX_SEALED			0x20
 #define BQ27XXX_SET_CFGUPDATE		0x13
-#define BQ27XXX_SOFT_RESET			0x42
-#define BQ27XXX_RESET				0x41
+#define BQ27XXX_SOFT_RESET		0x42
+#define BQ27XXX_RESET			0x41
 
-#define BQ27XXX_RS					(10) /* Resistor sense mOhm */
+#define BQ27XXX_RS			(20) /* Resistor sense mOhm */
 #define BQ27XXX_POWER_CONSTANT		(29200) /* 29.2 µV^2 * 1000 */
 #define BQ27XXX_CURRENT_CONSTANT	(3570) /* 3.57 µV * 1000 */
 
-#define INVALID_REG_ADDR			0xFF
-
-/*
- * Linux port stuff
- *
- */
-enum power_supply_property
-{
-	/* Properties of type `int' */
-	POWER_SUPPLY_PROP_STATUS = 0,
-	POWER_SUPPLY_PROP_CHARGE_TYPE,
-	POWER_SUPPLY_PROP_HEALTH,
-	POWER_SUPPLY_PROP_PRESENT,
-	POWER_SUPPLY_PROP_ONLINE,
-	POWER_SUPPLY_PROP_AUTHENTIC,
-	POWER_SUPPLY_PROP_TECHNOLOGY,
-	POWER_SUPPLY_PROP_CYCLE_COUNT,
-	POWER_SUPPLY_PROP_VOLTAGE_MAX,
-	POWER_SUPPLY_PROP_VOLTAGE_MIN,
-	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
-	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
-	POWER_SUPPLY_PROP_VOLTAGE_NOW,
-	POWER_SUPPLY_PROP_VOLTAGE_AVG,
-	POWER_SUPPLY_PROP_VOLTAGE_OCV,
-	POWER_SUPPLY_PROP_VOLTAGE_BOOT,
-	POWER_SUPPLY_PROP_CURRENT_MAX,
-	POWER_SUPPLY_PROP_CURRENT_NOW,
-	POWER_SUPPLY_PROP_CURRENT_AVG,
-	POWER_SUPPLY_PROP_CURRENT_BOOT,
-	POWER_SUPPLY_PROP_POWER_NOW,
-	POWER_SUPPLY_PROP_POWER_AVG,
-	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
-	POWER_SUPPLY_PROP_CHARGE_EMPTY_DESIGN,
-	POWER_SUPPLY_PROP_CHARGE_FULL,
-	POWER_SUPPLY_PROP_CHARGE_EMPTY,
-	POWER_SUPPLY_PROP_CHARGE_NOW,
-	POWER_SUPPLY_PROP_CHARGE_AVG,
-	POWER_SUPPLY_PROP_CHARGE_COUNTER,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX,
-	POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT,
-	POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT_MAX,
-	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD, /* in percents! */
-	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD, /* in percents! */
-	POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR,
-	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
-	POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT,
-	POWER_SUPPLY_PROP_INPUT_POWER_LIMIT,
-	POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN,
-	POWER_SUPPLY_PROP_ENERGY_EMPTY_DESIGN,
-	POWER_SUPPLY_PROP_ENERGY_FULL,
-	POWER_SUPPLY_PROP_ENERGY_EMPTY,
-	POWER_SUPPLY_PROP_ENERGY_NOW,
-	POWER_SUPPLY_PROP_ENERGY_AVG,
-	POWER_SUPPLY_PROP_CAPACITY, /* in percents! */
-	POWER_SUPPLY_PROP_CAPACITY_ALERT_MIN, /* in percents! */
-	POWER_SUPPLY_PROP_CAPACITY_ALERT_MAX, /* in percents! */
-	POWER_SUPPLY_PROP_CAPACITY_ERROR_MARGIN, /* in percents! */
-	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
-	POWER_SUPPLY_PROP_TEMP,
-	POWER_SUPPLY_PROP_TEMP_MAX,
-	POWER_SUPPLY_PROP_TEMP_MIN,
-	POWER_SUPPLY_PROP_TEMP_ALERT_MIN,
-	POWER_SUPPLY_PROP_TEMP_ALERT_MAX,
-	POWER_SUPPLY_PROP_TEMP_AMBIENT,
-	POWER_SUPPLY_PROP_TEMP_AMBIENT_ALERT_MIN,
-	POWER_SUPPLY_PROP_TEMP_AMBIENT_ALERT_MAX,
-	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
-	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
-	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
-	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
-	POWER_SUPPLY_PROP_TYPE, /* use power_supply.type instead */
-	POWER_SUPPLY_PROP_USB_TYPE,
-	POWER_SUPPLY_PROP_SCOPE,
-	POWER_SUPPLY_PROP_PRECHARGE_CURRENT,
-	POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT,
-	POWER_SUPPLY_PROP_CALIBRATE,
-	POWER_SUPPLY_PROP_MANUFACTURE_YEAR,
-	POWER_SUPPLY_PROP_MANUFACTURE_MONTH,
-	POWER_SUPPLY_PROP_MANUFACTURE_DAY,
-	/* Properties of type `const char *' */
-	POWER_SUPPLY_PROP_MODEL_NAME,
-	POWER_SUPPLY_PROP_MANUFACTURER,
-	POWER_SUPPLY_PROP_SERIAL_NUMBER,
-};
+#define INVALID_REG_ADDR	0xff
 
 /*
  * bq27xxx_reg_index - Register names
@@ -208,7 +134,7 @@ enum bq27xxx_reg_index {
 	[BQ27XXX_DM_CKSUM] = 0x60
 
 /* Register mappings */
-static uint8_t
+static u8
 	bq27000_regs[BQ27XXX_REG_MAX] = {
 		[BQ27XXX_REG_CTRL] = 0x00,
 		[BQ27XXX_REG_TEMP] = 0x06,
@@ -930,10 +856,10 @@ static enum power_supply_property bq78z100_props[] = {
 };
 
 struct bq27xxx_dm_reg {
-	uint8_t subclass_id;
-	uint8_t offset;
-	uint8_t bytes;
-	uint16_t min, max;
+	u8 subclass_id;
+	u8 offset;
+	u8 bytes;
+	u16 min, max;
 };
 
 enum bq27xxx_dm_reg_id {
@@ -1048,9 +974,9 @@ static struct bq27xxx_dm_reg bq27621_dm_regs[] = {
 	.props_size = ARRAY_SIZE(ref##_props) }
 
 static struct {
-	uint32_t opts;
-	uint32_t unseal_key;
-	uint8_t *regs;
+	u32 opts;
+	u32 unseal_key;
+	u8 *regs;
 	struct bq27xxx_dm_reg *dm_regs;
 	enum power_supply_property *props;
 	size_t props_size;
@@ -1107,9 +1033,9 @@ static LIST_HEAD(bq27xxx_battery_devices);
  * Encapsulates info required to manage chip data memory blocks.
  */
 struct bq27xxx_dm_buf {
-	uint8_t class;
-	uint8_t block;
-	uint8_t data[BQ27XXX_DM_SZ];
+	u8 class;
+	u8 block;
+	u8 data[BQ27XXX_DM_SZ];
 	bool has_data, dirty;
 };
 
@@ -1118,7 +1044,7 @@ struct bq27xxx_dm_buf {
 	.block = (di)->dm_regs[i].offset / BQ27XXX_DM_SZ, \
 }
 
-static inline uint16_t *bq27xxx_dm_reg_ptr(struct bq27xxx_dm_buf *buf,
+static inline u16 *bq27xxx_dm_reg_ptr(struct bq27xxx_dm_buf *buf,
 				      struct bq27xxx_dm_reg *reg)
 {
 	if (buf->class == reg->subclass_id &&
@@ -1136,6 +1062,45 @@ static const char * const bq27xxx_dm_reg_name[] = {
 
 
 static bool bq27xxx_dt_to_nvm = true;
+module_param_named(dt_monitored_battery_updates_nvm, bq27xxx_dt_to_nvm, bool, 0444);
+MODULE_PARM_DESC(dt_monitored_battery_updates_nvm,
+	"Devicetree monitored-battery config updates data memory on NVM/flash chips.\n"
+	"Users must set this =0 when installing a different type of battery!\n"
+	"Default is =1."
+#ifndef CONFIG_BATTERY_BQ27XXX_DT_UPDATES_NVM
+	"\nSetting this affects future kernel updates, not the current configuration."
+#endif
+);
+
+static int poll_interval_param_set(const char *val, const struct kernel_param *kp)
+{
+	struct bq27xxx_device_info *di;
+	unsigned int prev_val = *(unsigned int *) kp->arg;
+	int ret;
+
+	ret = param_set_uint(val, kp);
+	if (ret < 0 || prev_val == *(unsigned int *) kp->arg)
+		return ret;
+
+	mutex_lock(&bq27xxx_list_lock);
+	list_for_each_entry(di, &bq27xxx_battery_devices, list) {
+		cancel_delayed_work_sync(&di->work);
+		schedule_delayed_work(&di->work, 0);
+	}
+	mutex_unlock(&bq27xxx_list_lock);
+
+	return ret;
+}
+
+static const struct kernel_param_ops param_ops_poll_interval = {
+	.get = param_get_uint,
+	.set = poll_interval_param_set,
+};
+
+static unsigned int poll_interval = 360;
+module_param_cb(poll_interval, &param_ops_poll_interval, &poll_interval, 0644);
+MODULE_PARM_DESC(poll_interval,
+		 "battery poll interval in seconds - 0 disables polling");
 
 /*
  * Common code for BQ27xxx devices
@@ -1251,9 +1216,9 @@ out:
 	return ret;
 }
 
-static uint8_t bq27xxx_battery_checksum_dm_block(struct bq27xxx_dm_buf *buf)
+static u8 bq27xxx_battery_checksum_dm_block(struct bq27xxx_dm_buf *buf)
 {
-	uint16_t sum = 0;
+	u16 sum = 0;
 	int i;
 
 	for (i = 0; i < BQ27XXX_DM_SZ; i++)
@@ -1288,7 +1253,7 @@ static int bq27xxx_battery_read_dm_block(struct bq27xxx_device_info *di,
 	if (ret < 0)
 		goto out;
 
-	if ((uint8_t)ret != bq27xxx_battery_checksum_dm_block(buf)) {
+	if ((u8)ret != bq27xxx_battery_checksum_dm_block(buf)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1310,7 +1275,7 @@ static void bq27xxx_battery_update_dm_block(struct bq27xxx_device_info *di,
 {
 	struct bq27xxx_dm_reg *reg = &di->dm_regs[reg_id];
 	const char *str = bq27xxx_dm_reg_name[reg_id];
-	uint16_t *prev = bq27xxx_dm_reg_ptr(buf, reg);
+	u16 *prev = bq27xxx_dm_reg_ptr(buf, reg);
 
 	if (prev == NULL) {
 		dev_warn(di->dev, "buffer does not match %s dm spec\n", str);
@@ -1355,7 +1320,7 @@ static void bq27xxx_battery_update_dm_block(struct bq27xxx_device_info *di,
 static int bq27xxx_battery_cfgupdate_priv(struct bq27xxx_device_info *di, bool active)
 {
 	const int limit = 100;
-	uint16_t cmd = active ? BQ27XXX_SET_CFGUPDATE : BQ27XXX_SOFT_RESET;
+	u16 cmd = active ? BQ27XXX_SET_CFGUPDATE : BQ27XXX_SOFT_RESET;
 	int ret, try = limit;
 
 	ret = bq27xxx_write(di, BQ27XXX_REG_CTRL, cmd, false);
@@ -1836,6 +1801,7 @@ void bq27xxx_battery_update(struct bq27xxx_device_info *di)
 
 	di->last_update = jiffies;
 }
+EXPORT_SYMBOL_GPL(bq27xxx_battery_update);
 
 static void bq27xxx_battery_poll(struct work_struct *work)
 {
@@ -2179,3 +2145,10 @@ void bq27xxx_battery_teardown(struct bq27xxx_device_info *di)
 
 	mutex_destroy(&di->lock);
 }
+EXPORT_SYMBOL_GPL(bq27xxx_battery_teardown);
+
+MODULE_AUTHOR("Rodolfo Giometti <giometti@linux.it>");
+MODULE_DESCRIPTION("BQ27xxx battery monitor driver");
+MODULE_LICENSE("GPL");
+
+generated by cgit 1.2.3-1.el7 (git 2.26.2) at 2022-07-02 00:53:29 +0000
