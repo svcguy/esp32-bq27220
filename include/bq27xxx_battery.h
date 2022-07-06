@@ -1,84 +1,72 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-#ifndef __LINUX_BQ27X00_BATTERY_H__
-#define __LINUX_BQ27X00_BATTERY_H__
+/**
+ * @file	bq27xxx_battery.h
+ * @author	svcguy
+ * @brief	An ESP-IDF port of TI's bq2xxx Linux driver
+ * @version	0.1
+ * @date	2022-07-02
+ * 
+ * @copyright Copyright (c) 2022
+ * 
+ */
 
-enum bq27xxx_chip {
-	BQ27000 = 1, /* bq27000, bq27200 */
-	BQ27010, /* bq27010, bq27210 */
-	BQ2750X, /* bq27500 deprecated alias */
-	BQ2751X, /* bq27510, bq27520 deprecated alias */
-	BQ2752X,
-	BQ27500, /* bq27500/1 */
-	BQ27510G1, /* bq27510G1 */
-	BQ27510G2, /* bq27510G2 */
-	BQ27510G3, /* bq27510G3 */
-	BQ27520G1, /* bq27520G1 */
-	BQ27520G2, /* bq27520G2 */
-	BQ27520G3, /* bq27520G3 */
-	BQ27520G4, /* bq27520G4 */
-	BQ27521, /* bq27521 */
-	BQ27530, /* bq27530, bq27531 */
-	BQ27531,
-	BQ27541, /* bq27541, bq27542, bq27546, bq27742 */
-	BQ27542,
-	BQ27546,
-	BQ27742,
-	BQ27545, /* bq27545 */
-	BQ27411,
-	BQ27421, /* bq27421, bq27441, bq27621 */
-	BQ27425,
-	BQ27426,
-	BQ27441,
-	BQ27621,
-	BQ27Z561,
-	BQ28Z610,
-	BQ34Z100,
-	BQ78Z100,
-};
+#ifndef _BQ27XXX_BATTERY_H
+#define _BQ27XXX_BATTERY_H
 
-struct bq27xxx_device_info;
-struct bq27xxx_access_methods {
-	int (*read)(struct bq27xxx_device_info *di, u8 reg, bool single);
-	int (*write)(struct bq27xxx_device_info *di, u8 reg, int value, bool single);
-	int (*read_bulk)(struct bq27xxx_device_info *di, u8 reg, u8 *data, int len);
-	int (*write_bulk)(struct bq27xxx_device_info *di, u8 reg, u8 *data, int len);
-};
+#include <stdint.h>
+#include <stdbool.h>
 
-struct bq27xxx_reg_cache {
-	int temperature;
-	int time_to_empty;
-	int time_to_empty_avg;
-	int time_to_full;
-	int charge_full;
-	int cycle_count;
-	int capacity;
-	int energy;
-	int flags;
-	int health;
-};
+#include "esp_err.h"
 
-struct bq27xxx_device_info {
-	struct device *dev;
-	int id;
-	enum bq27xxx_chip chip;
-	u32 opts;
-	const char *name;
-	struct bq27xxx_dm_reg *dm_regs;
-	u32 unseal_key;
-	struct bq27xxx_access_methods bus;
-	struct bq27xxx_reg_cache cache;
-	int charge_design_full;
-	unsigned long last_update;
-	struct delayed_work work;
-	struct power_supply *bat;
-	struct list_head list;
-	struct mutex lock;
-	u8 *regs;
-};
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
-void bq27xxx_battery_update(struct bq27xxx_device_info *di);
-int bq27xxx_battery_setup(struct bq27xxx_device_info *di);
-void bq27xxx_battery_teardown(struct bq27xxx_device_info *di);
+typedef struct
+{
+	uint16_t	time_to_empty_min;
+	uint16_t	time_to_full_min;
+	uint16_t 	temperature_K;
+	uint16_t 	voltage_mV;
+	int16_t 	current_mA;
+	uint16_t	full_capacity_mAh;
+	int16_t		average_power_mWh;
+	uint16_t	soc_percent;
+	uint16_t	status;
+}
+bq27xxx_data_t;
 
-#endif
+typedef struct
+{
+	esp_err_t (*read)(bq27xxx_device_info_t *di, uint8_t reg, bool single);
+	esp_err_t (*write)(bq27xxx_device_info_t *di, uint8_t reg, int16_t value, bool single);
+	esp_err_t (*read_bulk)(bq27xxx_device_info_t *di, uint8_t reg, uint8_t *data, size_t len);
+	esp_err_t (*write_bulk)(bq27xxx_device_info_t *di, uint8_t reg, uint8_t *data, size_t len);
+	bool using_mutex;
+	SemaphoreHandle_t *i2c_mutex;
+}
+bq27xxx_bus_t;
 
+typedef struct
+{
+	bq27xxx_data_t	data;
+	bq27xxx_bus_t	bus;
+	TaskHandle_t	bq27xxx_task;
+	uint16_t		design_capacity_mAh;
+	uint16_t		op_status;
+}
+bq27xxx_device_info_t;
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif /* __cplusplus */
+
+esp_err_t bq27xxx_init(bq27xxx_device_info_t *di);
+esp_err_t bq27xxx_start_polling(bq27xxx_device_info_t *di);
+esp_err_t bq27xxx_stop_polling(bq27xxx_device_info_t *di);
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
+#endif /* BQ27XXX_BATTERY_H */
